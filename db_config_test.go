@@ -1,8 +1,23 @@
 package loggerhead
 
 import (
+	"database/sql"
 	"testing"
 )
+
+const (
+	certDeleteQ = "DELETE FROM certificates;"
+)
+
+func clearDB(db *sql.DB) error {
+	_, err := db.Exec(frontierDeleteQ)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(certDeleteQ)
+	return err
+}
 
 func TestDB(t *testing.T) {
 	db, err := getDB()
@@ -10,18 +25,13 @@ func TestDB(t *testing.T) {
 		t.Fatalf("Error opening DB: %v", err)
 	}
 
-	_, err = db.Exec("CREATE TABLE frontier (index BIGINT, subtree_size BIGINT, subhead BYTEA);")
-	if err != nil {
-		t.Fatalf("Error creating table: %v", err)
-	}
-
 	_, err = db.Exec("INSERT INTO frontier VALUES ($1, $2, $3);", 1, 1, []byte{0, 1, 2, 3})
 	if err != nil {
 		t.Fatalf("Error inserting into table: %v", err)
 	}
 
-	_, err = db.Exec("DROP TABLE frontier;")
+	err = clearDB(db)
 	if err != nil {
-		t.Fatalf("Error dropping table: %v", err)
+		t.Fatalf("Error clearing DB: %v", err)
 	}
 }

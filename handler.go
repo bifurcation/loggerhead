@@ -19,7 +19,7 @@ const (
 )
 
 type LogHandler struct {
-	db *sql.DB
+	DB *sql.DB
 }
 
 type addChainRequest struct {
@@ -111,7 +111,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 
 	// Update the DB
-	tx, err := lh.db.Begin()
+	tx, err := lh.DB.Begin()
 	if err != nil {
 		response.WriteHeader(http.StatusServiceUnavailable)
 		response.Write([]byte(fmt.Sprintf("Could not get DB transaction: %v", err)))

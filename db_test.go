@@ -2,12 +2,19 @@ package loggerhead
 
 import (
 	"database/sql"
+	_ "github.com/lib/pq"
 	"testing"
 )
 
 const (
-	certDeleteQ = "DELETE FROM certificates;"
+	driver           = "postgres"
+	connectionString = "user=rbarnes dbname=rbarnes sslmode=disable"
+	certDeleteQ      = "DELETE FROM certificates;"
 )
+
+func getDB() (*sql.DB, error) {
+	return sql.Open(driver, connectionString)
+}
 
 func clearDB(db *sql.DB) error {
 	_, err := db.Exec(frontierDeleteQ)

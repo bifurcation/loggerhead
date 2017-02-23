@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/bifurcation/loggerhead"
 	_ "github.com/lib/pq"
+
+	"github.com/bifurcation/loggerhead"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 /*
@@ -43,6 +45,8 @@ func main() {
 	}
 
 	handler := &loggerhead.LogHandler{db}
+
+	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/ct/v1/add-chain", handler)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

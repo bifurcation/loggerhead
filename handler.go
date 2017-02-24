@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"time"
 
@@ -118,11 +119,52 @@ func writefrontier(tx *sql.Tx, f *frontier) error {
 	return nil
 }
 
+var (
+	outcomeBodyReadErr      = "body-read-err"
+	outcomeJSONParseErr     = "json-parse-err"
+	outcomeEmptyChainErr    = "empty-chain"
+	outcomeBase64DecodeErr  = "base64-decode-err"
+	outcomeTxBeginErr       = "tx-begin-err"
+	outcomeReadFrontierErr  = "read-frontier-err"
+	outcomeLogCertErr       = "log-cert-err"
+	outcomeWriteFrontierErr = "write-frontier-err"
+	outcomeTxCommitErr      = "tx-commit-err"
+	outcomeSuccess          = "success"
+
+	responseValues = map[string]struct {
+		Status  int
+		Message string
+	}{
+		outcomeBodyReadErr:      {http.StatusBadRequest, "Failed to read body: %v"},
+		outcomeJSONParseErr:     {http.StatusBadRequest, "Failed to parse body: %v"},
+		outcomeEmptyChainErr:    {http.StatusBadRequest, "No certificates provided in body: %v"},
+		outcomeBase64DecodeErr:  {http.StatusBadRequest, "Base64 decoding failed: %v"},
+		outcomeTxBeginErr:       {http.StatusInternalServerError, "Could not get DB transaction: %v"},
+		outcomeReadFrontierErr:  {http.StatusInternalServerError, "Failed to fetch frontier: %v"},
+		outcomeLogCertErr:       {http.StatusInternalServerError, "Failed to log certificate: %v"},
+		outcomeWriteFrontierErr: {http.StatusInternalServerError, "Failed to write frontier: %v"},
+		outcomeTxCommitErr:      {http.StatusInternalServerError, "Failed to commit changes: %v"},
+		outcomeSuccess:          {http.StatusOK, "success: %v"},
+	}
+)
+
 func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	outcome := outcomeSuccess
+	err := error(nil)
 	enterHandler := float64(time.Now().UnixNano()) / 1000000000.0
 	defer func() {
 		exitHandler := float64(time.Now().UnixNano()) / 1000000000.0
-		handlerTime.Observe(exitHandler - enterHandler)
+
+		elapsed := exitHandler - enterHandler
+		status := responseValues[outcome].Status
+		message := fmt.Sprintf(responseValues[outcome].Message, err)
+
+		handlerTime.Observe(elapsed)
+		requestResult.With(prometheus.Labels{"outcome": outcome}).Inc()
+
+		response.WriteHeader(status)
+		response.Write([]byte(message))
+		log.Printf("[%03d] [%8.6f] %s", status, elapsed, message)
 	}()
 
 	// Extract certificate from request
@@ -132,42 +174,32 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	//  - No deduplication
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		requestResult.With(prometheus.Labels{"outcome": "body-read-err"}).Inc()
-		response.WriteHeader(http.StatusBadRequest)
-		response.Write([]byte(fmt.Sprintf("Failed to read body: %v", err)))
+		outcome = outcomeBodyReadErr
 		return
 	}
 
 	ctRequest := addChainRequest{}
 	err = json.Unmarshal(body, &ctRequest)
 	if err != nil {
-		requestResult.With(prometheus.Labels{"outcome": "body-parse-err"}).Inc()
-		response.WriteHeader(http.StatusBadRequest)
-		response.Write([]byte(fmt.Sprintf("Failed to parse body: %v", err)))
+		outcome = outcomeJSONParseErr
 		return
 	}
 
 	if len(ctRequest.Chain) == 0 {
-		requestResult.With(prometheus.Labels{"outcome": "empty-chain"}).Inc()
-		response.WriteHeader(http.StatusBadRequest)
-		response.Write([]byte("No certificates provided in body"))
+		outcome = outcomeEmptyChainErr
 		return
 	}
 
 	cert, err := base64.StdEncoding.DecodeString(ctRequest.Chain[0])
 	if err != nil {
-		requestResult.With(prometheus.Labels{"outcome": "base64-decode-err"}).Inc()
-		response.WriteHeader(http.StatusBadRequest)
-		response.Write([]byte(fmt.Sprintf("Base64 decoding failed: %v", err)))
+		outcome = outcomeBase64DecodeErr
 		return
 	}
 
 	// Update the DB
 	tx, err := lh.DB.Begin()
 	if err != nil {
-		requestResult.With(prometheus.Labels{"outcome": "tx-begin-err"}).Inc()
-		response.WriteHeader(http.StatusServiceUnavailable)
-		response.Write([]byte(fmt.Sprintf("Could not get DB transaction: %v", err)))
+		outcome = outcomeTxBeginErr
 		return
 	}
 
@@ -181,9 +213,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	f, err := readfrontier(tx)
 	if err != nil {
 		tx.Rollback()
-		requestResult.With(prometheus.Labels{"outcome": "read-frontier-err"}).Inc()
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(fmt.Sprintf("Failed to fetch frontier: %v", err)))
+		outcome = outcomeReadFrontierErr
 		return
 	}
 
@@ -200,9 +230,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	err = logCertificate(tx, timestamp, treeSize, treeHead, cert)
 	if err != nil {
 		tx.Rollback()
-		requestResult.With(prometheus.Labels{"outcome": "log-cert-err"}).Inc()
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(fmt.Sprintf("Failed to log certificate: %v", err)))
+		outcome = outcomeLogCertErr
 		return
 	}
 
@@ -210,9 +238,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	err = writefrontier(tx, f)
 	if err != nil {
 		tx.Rollback()
-		requestResult.With(prometheus.Labels{"outcome": "log-cert-err"}).Inc()
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(fmt.Sprintf("Failed to log certificate: %v", err)))
+		outcome = outcomeWriteFrontierErr
 		return
 	}
 
@@ -220,13 +246,9 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	err = tx.Commit()
 	if err != nil {
 		tx.Rollback()
-		requestResult.With(prometheus.Labels{"outcome": "tx-commit-err"}).Inc()
-		response.WriteHeader(http.StatusInternalServerError)
-		response.Write([]byte(fmt.Sprintf("Failed to commit changes: %v", err)))
+		outcome = outcomeTxCommitErr
 		return
 	}
 
-	// XXX: Should sign and return SCT
-	requestResult.With(prometheus.Labels{"outcome": "success"}).Inc()
-	response.WriteHeader(http.StatusOK)
+	outcome = outcomeSuccess
 }

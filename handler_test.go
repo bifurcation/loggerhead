@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/spanner"
 )
 
 func fatalIfNotNil(t *testing.T, err error, msg string) {
@@ -24,7 +26,6 @@ func TestHandler(t *testing.T) {
 		"HNlVdY13CCavI+R8L4SQbwfbZmgMR1INW70mejX3LQU=",
 		"cs0n2iQFlKV3AQ6eW9UuWwhmGb1n/D/BEH1D8S02D40=",
 	}
-	certSelectQ := "SELECT * FROM certificates WHERE tree_size = $1;"
 
 	db, err := getDB()
 	fatalIfNotNil(t, err, "getDB")
@@ -47,10 +48,11 @@ func TestHandler(t *testing.T) {
 		}
 
 		// Check that the frontier looks correct
-		tx, err := db.Begin()
-		fatalIfNotNil(t, err, "db.Begin")
-
-		f, err := readfrontier(tx)
+		var f *frontier
+		_, err := db.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
+			f, err = readFrontier(txn)
+			return err
+		})
 		fatalIfNotNil(t, err, "Reading frontier")
 
 		treeSize := f.Size()
@@ -65,11 +67,16 @@ func TestHandler(t *testing.T) {
 		}
 
 		// Check that the certificates table looks correct
-		now := uint64(time.Now().Unix())
-		var timestamp, treeSize2 uint64
+		now := time.Now().Unix()
+		var timestamp, treeSize2 int64
 		var treeHead, certData []byte
-		err = tx.QueryRow(certSelectQ, treeSize).Scan(&timestamp, &treeSize2, &treeHead, &certData)
+
+		cols := []string{"timestamp", "tree_size", "tree_head", "cert"}
+		row, err := db.Single().ReadRow(ctx(), "certificates", spanner.Key{int64(treeSize)}, cols)
 		fatalIfNotNil(t, err, "Error finding certificate")
+
+		err = row.Columns(&timestamp, &treeSize2, &treeHead, &certData)
+		fatalIfNotNil(t, err, "Error reading certificate data")
 
 		if now-timestamp > 1 /* seconds */ {
 			t.Fatalf("Incorrect timestamp [%d] != [%d]", timestamp, now)
@@ -83,11 +90,12 @@ func TestHandler(t *testing.T) {
 			t.Fatalf("Incorrect cert data [%x] != [%x]", certDER, certData)
 		}
 
-		tx.Rollback()
 	}
 
-	err = clearDB(db)
-	if err != nil {
-		t.Fatal("clearDB:", err)
-	}
+	/*
+		err = clearDB(db)
+		if err != nil {
+			t.Fatal("clearDB:", err)
+		}
+	*/
 }

@@ -1,44 +1,108 @@
 package loggerhead
 
 import (
-	"database/sql"
-	_ "github.com/lib/pq"
+	"cloud.google.com/go/spanner"
+	"golang.org/x/net/context"
 	"testing"
+	"time"
 )
 
 const (
-	driver           = "postgres"
-	connectionString = "user=rbarnes dbname=rbarnes sslmode=disable"
-	certDeleteQ      = "DELETE FROM certificates;"
+	actuallyRun = false
+	dbName      = "projects/loggerhead-159916/instances/loggerhead/databases/loggerhead"
 )
 
-func getDB() (*sql.DB, error) {
-	return sql.Open(driver, connectionString)
+func ctx() context.Context {
+	ctx, _ := context.WithTimeout(context.Background(), 1*time.Minute)
+	return ctx
 }
 
-func clearDB(db *sql.DB) error {
-	_, err := db.Exec(frontierDeleteQ)
-	if err != nil {
-		return err
-	}
+func getDB() (*spanner.Client, error) {
+	return spanner.NewClient(ctx(), dbName)
+}
 
-	_, err = db.Exec(certDeleteQ)
+func clearDB(db *spanner.Client) error {
+	_, err := db.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
+		prettyMuchEverything := spanner.KeyRange{
+			Start: spanner.Key{0},
+			End:   spanner.Key{10000000},
+			Kind:  spanner.ClosedClosed,
+		}
+
+		err := txn.BufferWrite([]*spanner.Mutation{
+			spanner.DeleteKeyRange("frontier", prettyMuchEverything),
+			spanner.DeleteKeyRange("certificates", prettyMuchEverything),
+		})
+		return err
+	})
+
 	return err
 }
 
 func TestDB(t *testing.T) {
-	db, err := getDB()
-	if err != nil {
-		t.Fatalf("Error opening DB: %v", err)
+	// XXX: This is guarded because it mutates the database.  Only safe to use if
+	// the DB is in pristine state and/or if you don't care about clearing it out.
+	if !actuallyRun {
+		return
 	}
 
-	_, err = db.Exec("INSERT INTO frontier VALUES ($1, $2, $3);", 1, 1, []byte{0, 1, 2, 3})
+	client, err := spanner.NewClient(ctx(), dbName)
 	if err != nil {
-		t.Fatalf("Error inserting into table: %v", err)
+		t.Fatal(err)
 	}
 
-	err = clearDB(db)
+	_, err = client.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
+		// Read the frontier
+		f, err := readFrontier(txn)
+
+		// Add a certificate
+		cert := []byte{0, 1, 2, 3}
+		f.Add(cert)
+
+		// Update the frontier
+		frontierCols := []string{"index", "subtree_size", "subhead"}
+		mutations := make([]*spanner.Mutation, f.Len())
+		for i, entry := range f.entries {
+			vals := []interface{}{i, int64(entry.SubtreeSize), entry.Value}
+			mutations[i] = spanner.InsertOrUpdate("frontier", frontierCols, vals)
+		}
+		err = txn.BufferWrite(mutations)
+		if err != nil {
+			return err
+		}
+
+		// Write the certificate
+		timestamp := time.Now().Unix()
+		certCols := []string{"timestamp", "tree_size", "tree_head", "cert"}
+		certVals := []interface{}{timestamp, int64(f.Size()), f.Head(), cert}
+		mutations = []*spanner.Mutation{spanner.Insert("certificates", certCols, certVals)}
+		err = txn.BufferWrite(mutations)
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		t.Fatalf("Error clearing DB: %v", err)
+		t.Fatal(err)
+	}
+
+	_, err = client.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
+		prettyMuchEverything := spanner.KeyRange{
+			Start: spanner.Key{0},
+			End:   spanner.Key{10000000},
+			Kind:  spanner.ClosedClosed,
+		}
+
+		err := txn.BufferWrite([]*spanner.Mutation{
+			spanner.DeleteKeyRange("frontier", prettyMuchEverything),
+			spanner.DeleteKeyRange("certificates", prettyMuchEverything),
+		})
+		return err
+	})
+
+	if err != nil {
+		t.Fatal(err)
 	}
 }

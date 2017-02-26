@@ -1,7 +1,6 @@
 package loggerhead
 
 import (
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,15 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"cloud.google.com/go/spanner"
 	"github.com/prometheus/client_golang/prometheus"
-)
-
-const (
-	frontierSelectQ = "SELECT * FROM frontier ORDER BY index;"
-	frontierDeleteQ = "DELETE FROM frontier;"
-	frontierInsertQ = "INSERT INTO frontier VALUES ($1, $2, $3);"
-
-	certInsertQ = "INSERT INTO certificates VALUES ($1, $2, $3, $4);"
+	"golang.org/x/net/context"
 )
 
 // Prometheus metrics
@@ -62,64 +55,15 @@ func init() {
 }
 
 type LogHandler struct {
-	DB *sql.DB
+	Client *spanner.Client
 }
 
 type addChainRequest struct {
 	Chain []string `json:"chain"`
 }
 
-func readfrontier(tx *sql.Tx) (*frontier, error) {
-	f := frontier{}
-
-	rows, err := tx.Query(frontierSelectQ)
-	if err != nil {
-		return nil, err
-	}
-
-	next := uint64(0)
-	var index uint64
-	var subtreeSize uint64
-	var value []byte
-	for rows.Next() {
-		err = rows.Scan(&index, &subtreeSize, &value)
-		if err != nil {
-			return nil, err
-		}
-
-		if index != next {
-			return nil, fmt.Errorf("Row returned out of order [%d] != [%d]", index, next)
-		}
-
-		next += 1
-		f.entries = append(f.entries, frontierEntry{subtreeSize, value})
-	}
-
-	return &f, nil
-}
-
-func logCertificate(tx *sql.Tx, timestamp, treeSize uint64, treeHead, cert []byte) error {
-	_, err := tx.Exec(certInsertQ, timestamp, treeSize, treeHead, cert)
-	return err
-}
-
-func writefrontier(tx *sql.Tx, f *frontier) error {
-	_, err := tx.Exec(frontierDeleteQ)
-	if err != nil {
-		return err
-	}
-
-	for i, entry := range f.entries {
-		_, err = tx.Exec(frontierInsertQ, i, entry.SubtreeSize, entry.Value)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 var (
+	outcomeDefault          = "default"
 	outcomeBodyReadErr      = "body-read-err"
 	outcomeJSONParseErr     = "json-parse-err"
 	outcomeEmptyChainErr    = "empty-chain"
@@ -135,11 +79,11 @@ var (
 		Status  int
 		Message string
 	}{
+		outcomeDefault:          {http.StatusInternalServerError, ""},
 		outcomeBodyReadErr:      {http.StatusBadRequest, "Failed to read body: %v"},
 		outcomeJSONParseErr:     {http.StatusBadRequest, "Failed to parse body: %v"},
 		outcomeEmptyChainErr:    {http.StatusBadRequest, "No certificates provided in body: %v"},
 		outcomeBase64DecodeErr:  {http.StatusBadRequest, "Base64 decoding failed: %v"},
-		outcomeTxBeginErr:       {http.StatusInternalServerError, "Could not get DB transaction: %v"},
 		outcomeReadFrontierErr:  {http.StatusInternalServerError, "Failed to fetch frontier: %v"},
 		outcomeLogCertErr:       {http.StatusInternalServerError, "Failed to log certificate: %v"},
 		outcomeWriteFrontierErr: {http.StatusInternalServerError, "Failed to write frontier: %v"},
@@ -148,8 +92,34 @@ var (
 	}
 )
 
+func readFrontier(txn *spanner.ReadWriteTransaction) (*frontier, error) {
+	f := frontier{}
+	keySet := spanner.KeySet{All: true}
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	iter := txn.Read(ctx, "frontier", keySet, []string{"index", "subtree_size", "subhead"})
+	err := iter.Do(func(row *spanner.Row) error {
+		var index int64
+		var subtreeSize int64
+		var subhead []byte
+		err := row.Columns(&index, &subtreeSize, &subhead)
+		if err != nil {
+			return err
+		}
+
+		f.entries = append(f.entries, frontierEntry{uint64(subtreeSize), subhead})
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	f.Sort()
+	return &f, nil
+}
+
 func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	outcome := outcomeSuccess
+	outcome := outcomeDefault
 	err := error(nil)
 	enterHandler := float64(time.Now().UnixNano()) / 1000000000.0
 	defer func() {
@@ -197,55 +167,52 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 
 	// Update the DB
-	tx, err := lh.DB.Begin()
-	if err != nil {
-		outcome = outcomeTxBeginErr
-		return
-	}
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	_, err = lh.Client.ReadWriteTransaction(ctx, func(txn *spanner.ReadWriteTransaction) error {
+		enterTx := float64(time.Now().UnixNano()) / 1000000000.0
+		defer func() {
+			exitTx := float64(time.Now().UnixNano()) / 1000000000.0
+			transactionTime.Observe(exitTx - enterTx)
+		}()
 
-	enterTx := float64(time.Now().UnixNano()) / 1000000000.0
-	defer func() {
-		exitTx := float64(time.Now().UnixNano()) / 1000000000.0
-		transactionTime.Observe(exitTx - enterTx)
-	}()
+		// Read the frontier
+		f, err := readFrontier(txn)
+		if err != nil {
+			outcome = outcomeReadFrontierErr
+			return err
+		}
 
-	// Get the frontier from the DB
-	f, err := readfrontier(tx)
-	if err != nil {
-		tx.Rollback()
-		outcome = outcomeReadFrontierErr
-		return
-	}
+		// Add the certificate to the frontier
+		f.Add(cert)
 
-	// Update the frontier with this certificate
-	enterUpdate := float64(time.Now().UnixNano()) / 1000000000.0
-	f.Add(cert)
-	treeSize := f.Size()
-	treeHead := f.Head()
-	exitUpdate := float64(time.Now().UnixNano()) / 1000000000.0
-	updateTime.Observe(exitUpdate - enterUpdate)
+		// Write the certificate
+		timestamp := time.Now().Unix()
+		certCols := []string{"timestamp", "tree_size", "tree_head", "cert"}
+		certVals := []interface{}{timestamp, int64(f.Size()), f.Head(), cert}
+		mutations := []*spanner.Mutation{spanner.Insert("certificates", certCols, certVals)}
+		err = txn.BufferWrite(mutations)
+		if err != nil {
+			outcome = outcomeLogCertErr
+			return err
+		}
 
-	// Log the certificate
-	timestamp := uint64(time.Now().Unix())
-	err = logCertificate(tx, timestamp, treeSize, treeHead, cert)
-	if err != nil {
-		tx.Rollback()
-		outcome = outcomeLogCertErr
-		return
-	}
+		// Update the frontier in the DB
+		frontierCols := []string{"index", "subtree_size", "subhead"}
+		mutations = make([]*spanner.Mutation, f.Len())
+		for i, entry := range f.entries {
+			vals := []interface{}{i, int64(entry.SubtreeSize), entry.Value}
+			mutations[i] = spanner.InsertOrUpdate("frontier", frontierCols, vals)
+		}
+		err = txn.BufferWrite(mutations)
+		if err != nil {
+			outcome = outcomeWriteFrontierErr
+			return err
+		}
 
-	// Update the frontier
-	err = writefrontier(tx, f)
-	if err != nil {
-		tx.Rollback()
-		outcome = outcomeWriteFrontierErr
-		return
-	}
+		return nil
+	})
 
-	// Commit the changes
-	err = tx.Commit()
-	if err != nil {
-		tx.Rollback()
+	if err != nil && outcome == outcomeDefault {
 		outcome = outcomeTxCommitErr
 		return
 	}

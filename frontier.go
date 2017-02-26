@@ -3,6 +3,7 @@ package loggerhead
 import (
 	"crypto"
 	_ "crypto/sha256"
+	"sort"
 )
 
 // Merkle tree primitives
@@ -32,56 +33,77 @@ type frontierEntry struct {
 	Value       []byte
 }
 
-type frontier []frontierEntry
+type frontier struct {
+	entries []frontierEntry
+}
+
+func (f frontier) Len() int {
+	return len(f.entries)
+}
+
+func (f frontier) Less(i, j int) bool {
+	return f.entries[i].SubtreeSize > f.entries[j].SubtreeSize
+}
+
+func (f *frontier) Swap(i, j int) {
+	temp := f.entries[i]
+	f.entries[i] = f.entries[j]
+	f.entries[j] = temp
+}
+
+func (f *frontier) Sort() {
+	sort.Sort(f)
+}
 
 func (f *frontier) Compact() {
-	if len(*f) < 2 {
+	n := len(f.entries)
+
+	if n < 2 {
 		return
 	}
 
-	n := len(*f)
 	for n > 1 {
-		last := (*f)[n-1]
-		nextToLast := (*f)[n-2]
+		last := f.entries[n-1]
+		nextToLast := f.entries[n-2]
 
 		if last.SubtreeSize != nextToLast.SubtreeSize {
 			break
 		}
 
 		n -= 1
-		(*f)[n-1] = frontierEntry{
+		f.entries[n-1] = frontierEntry{
 			SubtreeSize: last.SubtreeSize + nextToLast.SubtreeSize,
 			Value:       pairHash(nextToLast.Value, last.Value),
 		}
 	}
 
-	(*f) = (*f)[:n]
+	f.entries = f.entries[:n]
 }
 
 func (f *frontier) Add(v []byte) {
 	leaf := leafHash(v)
-	*f = append(*f, frontierEntry{1, leaf})
+	f.entries = append(f.entries, frontierEntry{1, leaf})
 	f.Compact()
 }
 
 func (f frontier) Size() uint64 {
 	size := uint64(0)
-	for _, entry := range f {
+	for _, entry := range f.entries {
 		size += entry.SubtreeSize
 	}
 	return size
 }
 
 func (f frontier) Head() []byte {
-	if len(f) == 1 {
-		return f[0].Value
+	if len(f.entries) == 1 {
+		return f.entries[0].Value
 	}
 
-	n := len(f) - 2
-	curr := pairHash(f[n].Value, f[n+1].Value)
+	n := len(f.entries) - 2
+	curr := pairHash(f.entries[n].Value, f.entries[n+1].Value)
 	for n > 0 {
 		n -= 1
-		curr = pairHash(f[n].Value, curr)
+		curr = pairHash(f.entries[n].Value, curr)
 	}
 
 	return curr

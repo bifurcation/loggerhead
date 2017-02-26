@@ -92,7 +92,7 @@ func readfrontier(tx *sql.Tx) (*frontier, error) {
 		}
 
 		next += 1
-		f = append(f, frontierEntry{subtreeSize, value})
+		f.entries = append(f.entries, frontierEntry{subtreeSize, value})
 	}
 
 	return &f, nil
@@ -109,7 +109,7 @@ func writefrontier(tx *sql.Tx, f *frontier) error {
 		return err
 	}
 
-	for i, entry := range *f {
+	for i, entry := range f.entries {
 		_, err = tx.Exec(frontierInsertQ, i, entry.SubtreeSize, entry.Value)
 		if err != nil {
 			return err

@@ -91,8 +91,13 @@ func TestHandler(t *testing.T) {
 		}
 
 	}
+}
 
+func TestClearDB(t *testing.T) {
 	/*
+		db, err := getDB()
+		fatalIfNotNil(t, err, "getDB")
+
 		err = clearDB(db)
 		if err != nil {
 			t.Fatal("clearDB:", err)

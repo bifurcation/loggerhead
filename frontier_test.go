@@ -28,11 +28,11 @@ func merkleTreeHead(d [][]byte) []byte {
 	return pairHash(l, r)
 }
 
-func Testfrontier(t *testing.T) {
+func TestFrontier(t *testing.T) {
 	f := frontier{}
 	d := [][]byte{}
 
-	for i := uint64(0); i < 10; i += 1 {
+	for i := uint64(0); i < testSamples; i += 1 {
 		v := []byte{byte(i)}
 		d = append(d, leafHash(v))
 		f.Add(v)

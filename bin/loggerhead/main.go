@@ -30,6 +30,10 @@ Content-Length: 58
 {"chain":["8TpFNrV+YbVkOX6VRjDoxKGb32DNgBo0nPNgOvivsnA="]}
 -----
 
+curl -H "Content-Type: application/json" -X POST \
+  -d '{"chain":["8TpFNrV+YbVkOX6VRjDoxKGb32DNgBo0nPNgOvivsnA="]}' \
+  http://ct.ipv.sx:8080/ct/v1/add-chain
+
 */
 
 func main() {

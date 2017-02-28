@@ -53,7 +53,7 @@ func TestDB(t *testing.T) {
 
 	_, err = client.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
 		// Read the frontier
-		f, err := readFrontier(txn)
+		f, _, err := readFrontier(txn)
 
 		// Add a certificate
 		cert := []byte{0, 1, 2, 3}
@@ -89,15 +89,15 @@ func TestDB(t *testing.T) {
 	}
 
 	_, err = client.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
-		prettyMuchEverything := spanner.KeyRange{
-			Start: spanner.Key{0},
-			End:   spanner.Key{10000000},
+		everything := spanner.KeyRange{
+			Start: spanner.Key{int64(-0x8000000000000000)},
+			End:   spanner.Key{int64(0x7fffffffffffffff)},
 			Kind:  spanner.ClosedClosed,
 		}
 
 		err := txn.BufferWrite([]*spanner.Mutation{
-			spanner.DeleteKeyRange("frontier", prettyMuchEverything),
-			spanner.DeleteKeyRange("certificates", prettyMuchEverything),
+			spanner.DeleteKeyRange("frontier", everything),
+			spanner.DeleteKeyRange("certificates", everything),
 		})
 		return err
 	})

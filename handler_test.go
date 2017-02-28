@@ -50,7 +50,7 @@ func TestHandler(t *testing.T) {
 		// Check that the frontier looks correct
 		var f *frontier
 		_, err := db.ReadWriteTransaction(ctx(), func(txn *spanner.ReadWriteTransaction) error {
-			f, err = readFrontier(txn)
+			f, _, err = readFrontier(txn)
 			return err
 		})
 		fatalIfNotNil(t, err, "Reading frontier")

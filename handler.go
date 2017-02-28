@@ -63,37 +63,44 @@ type addChainRequest struct {
 }
 
 var (
-	outcomeDefault          = "default"
-	outcomeBodyReadErr      = "body-read-err"
-	outcomeJSONParseErr     = "json-parse-err"
-	outcomeEmptyChainErr    = "empty-chain"
-	outcomeBase64DecodeErr  = "base64-decode-err"
-	outcomeTxBeginErr       = "tx-begin-err"
-	outcomeReadFrontierErr  = "read-frontier-err"
-	outcomeLogCertErr       = "log-cert-err"
-	outcomeWriteFrontierErr = "write-frontier-err"
-	outcomeTxCommitErr      = "tx-commit-err"
-	outcomeSuccess          = "success"
+	outcomeDefault           = "default"
+	outcomeBodyReadErr       = "body-read-err"
+	outcomeJSONParseErr      = "json-parse-err"
+	outcomeEmptyChainErr     = "empty-chain"
+	outcomeBase64DecodeErr   = "base64-decode-err"
+	outcomeTxBeginErr        = "tx-begin-err"
+	outcomeReadFrontierErr   = "read-frontier-err"
+	outcomeLogCertErr        = "log-cert-err"
+	outcomeDeleteFrontierErr = "delete-frontier-err"
+	outcomeWriteFrontierErr  = "write-frontier-err"
+	outcomeTxCommitErr       = "tx-commit-err"
+	outcomeSuccess           = "success"
 
 	responseValues = map[string]struct {
 		Status  int
 		Message string
 	}{
-		outcomeDefault:          {http.StatusInternalServerError, ""},
-		outcomeBodyReadErr:      {http.StatusBadRequest, "Failed to read body: %v"},
-		outcomeJSONParseErr:     {http.StatusBadRequest, "Failed to parse body: %v"},
-		outcomeEmptyChainErr:    {http.StatusBadRequest, "No certificates provided in body: %v"},
-		outcomeBase64DecodeErr:  {http.StatusBadRequest, "Base64 decoding failed: %v"},
-		outcomeReadFrontierErr:  {http.StatusInternalServerError, "Failed to fetch frontier: %v"},
-		outcomeLogCertErr:       {http.StatusInternalServerError, "Failed to log certificate: %v"},
-		outcomeWriteFrontierErr: {http.StatusInternalServerError, "Failed to write frontier: %v"},
-		outcomeTxCommitErr:      {http.StatusInternalServerError, "Failed to commit changes: %v"},
-		outcomeSuccess:          {http.StatusOK, "success: %v"},
+		outcomeDefault:           {http.StatusInternalServerError, ""},
+		outcomeBodyReadErr:       {http.StatusBadRequest, "Failed to read body: %v"},
+		outcomeJSONParseErr:      {http.StatusBadRequest, "Failed to parse body: %v"},
+		outcomeEmptyChainErr:     {http.StatusBadRequest, "No certificates provided in body: %v"},
+		outcomeBase64DecodeErr:   {http.StatusBadRequest, "Base64 decoding failed: %v"},
+		outcomeReadFrontierErr:   {http.StatusInternalServerError, "Failed to fetch frontier: %v"},
+		outcomeLogCertErr:        {http.StatusInternalServerError, "Failed to log certificate: %v"},
+		outcomeDeleteFrontierErr: {http.StatusInternalServerError, "Failed to delete frontier: %v"},
+		outcomeWriteFrontierErr:  {http.StatusInternalServerError, "Failed to write frontier: %v"},
+		outcomeTxCommitErr:       {http.StatusInternalServerError, "Failed to commit changes: %v"},
+		outcomeSuccess:           {http.StatusOK, "success: %v"},
 	}
 )
 
-func readFrontier(txn *spanner.ReadWriteTransaction) (*frontier, error) {
+func readFrontier(txn *spanner.ReadWriteTransaction) (*frontier, spanner.KeyRange, error) {
+
 	f := frontier{}
+
+	minIndex := int64(-1)
+	maxIndex := int64(-1)
+
 	keySet := spanner.KeySet{All: true}
 	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
 	iter := txn.Read(ctx, "frontier", keySet, []string{"index", "subtree_size", "subhead"})
@@ -106,16 +113,29 @@ func readFrontier(txn *spanner.ReadWriteTransaction) (*frontier, error) {
 			return err
 		}
 
+		if minIndex == -1 || (index < minIndex) {
+			minIndex = index
+		}
+		if maxIndex == -1 || (index > maxIndex) {
+			maxIndex = index
+		}
+
 		f.entries = append(f.entries, frontierEntry{uint64(subtreeSize), subhead})
 		return nil
 	})
 
+	kr := spanner.KeyRange{
+		Start: spanner.Key{minIndex},
+		End:   spanner.Key{maxIndex},
+		Kind:  spanner.ClosedClosed,
+	}
+
 	if err != nil {
-		return nil, err
+		return nil, kr, err
 	}
 
 	f.Sort()
-	return &f, nil
+	return &f, kr, nil
 }
 
 func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -176,7 +196,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		}()
 
 		// Read the frontier
-		f, err := readFrontier(txn)
+		f, keyRange, err := readFrontier(txn)
 		if err != nil {
 			outcome = outcomeReadFrontierErr
 			return err
@@ -196,7 +216,15 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 			return err
 		}
 
-		// Update the frontier in the DB
+		// Delete the old frontier
+		mutations = []*spanner.Mutation{spanner.DeleteKeyRange("frontier", keyRange)}
+		err = txn.BufferWrite(mutations)
+		if err != nil {
+			outcome = outcomeDeleteFrontierErr
+			return err
+		}
+
+		// Write the new frontier
 		frontierCols := []string{"index", "subtree_size", "subhead"}
 		mutations = make([]*spanner.Mutation, f.Len())
 		for i, entry := range f.entries {

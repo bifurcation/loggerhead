@@ -1,24 +1,23 @@
 package main
 
 import (
-	"database/sql"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
-	"os"
+	"time"
 
-	_ "github.com/lib/pq"
-
+	"cloud.google.com/go/spanner"
 	"github.com/bifurcation/loggerhead"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/context"
 )
 
 /*
 
 Test invocation:
 
-> go run main.go -conn "user=rbarnes dbname=rbarnes sslmode=disable"
+> export GOOGLE_APPLICATION_CREDENTIALS=<path-to-credentials>
+> go run main.go -conn "projects/loggerhead-159916/instances/loggerhead/databases/loggerhead"
 
 Test query:
 
@@ -34,14 +33,15 @@ Content-Length: 58
 */
 
 func main() {
-	var conn, port string
-	flag.StringVar(&conn, "conn", "", "Connection string")
+	var dbName, port string
+	flag.StringVar(&dbName, "db", "", "Spanner DB name")
 	flag.StringVar(&port, "port", "8080", "Port")
 	flag.Parse()
 
-	db, err := sql.Open("postgres", conn)
+	ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+	db, err := spanner.NewClient(ctx, dbName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening DB: %v", err)
+		log.Fatalf("Error opening DB connection: %v", err)
 	}
 
 	handler := &loggerhead.LogHandler{db}

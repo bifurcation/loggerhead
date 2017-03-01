@@ -95,8 +95,8 @@ func readfrontier(tx *sql.Tx) (*frontier, error) {
 
 		next += 1
 		f = append(f, frontierEntry{subtreeSize, value})
-		rows.Close()
 	}
+	rows.Close()
 
 	return &f, nil
 }

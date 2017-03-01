@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -62,7 +63,8 @@ func init() {
 }
 
 type LogHandler struct {
-	DB *sql.DB
+	DB     *sql.DB
+	dbLock sync.Mutex
 }
 
 type addChainRequest struct {
@@ -124,6 +126,7 @@ var (
 	outcomeJSONParseErr     = "json-parse-err"
 	outcomeEmptyChainErr    = "empty-chain"
 	outcomeBase64DecodeErr  = "base64-decode-err"
+	outcomeDBLockTimeout    = "db-lock-timeout"
 	outcomeTxBeginErr       = "tx-begin-err"
 	outcomeReadFrontierErr  = "read-frontier-err"
 	outcomeLogCertErr       = "log-cert-err"
@@ -139,6 +142,7 @@ var (
 		outcomeJSONParseErr:     {http.StatusBadRequest, "Failed to parse body: %v"},
 		outcomeEmptyChainErr:    {http.StatusBadRequest, "No certificates provided in body: %v"},
 		outcomeBase64DecodeErr:  {http.StatusBadRequest, "Base64 decoding failed: %v"},
+		outcomeDBLockTimeout:    {http.StatusInternalServerError, "Timed out waiting for DB: %v"},
 		outcomeTxBeginErr:       {http.StatusInternalServerError, "Could not get DB transaction: %v"},
 		outcomeReadFrontierErr:  {http.StatusInternalServerError, "Failed to fetch frontier: %v"},
 		outcomeLogCertErr:       {http.StatusInternalServerError, "Failed to log certificate: %v"},
@@ -163,7 +167,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		requestResult.With(prometheus.Labels{"outcome": outcome}).Inc()
 
 		response.WriteHeader(status)
-		response.Write([]byte(message))
+		response.Write([]byte(message + "\n"))
 		log.Printf("[%03d] [%8.6f] %s", status, elapsed, message)
 	}()
 
@@ -196,7 +200,26 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 
-	// Update the DB
+	// Await access to the DB
+	gotLock := make(chan bool, 1)
+	cancelled := make(chan bool, 1)
+	go func() {
+		lh.dbLock.Lock()
+		gotLock <- true
+		if <-cancelled {
+			lh.dbLock.Unlock()
+		}
+	}()
+
+	select {
+	case <-gotLock:
+	case <-time.After(500 * time.Millisecond):
+		cancelled <- true
+		outcome = outcomeDBLockTimeout
+		return
+	}
+	defer lh.dbLock.Unlock()
+
 	tx, err := lh.DB.Begin()
 	if err != nil {
 		outcome = outcomeTxBeginErr

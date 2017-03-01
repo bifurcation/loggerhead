@@ -44,7 +44,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error opening DB: %v", err)
 	}
 
-	handler := &loggerhead.LogHandler{db}
+	handler := &loggerhead.LogHandler{DB: db}
 
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/ct/v1/add-chain", handler)

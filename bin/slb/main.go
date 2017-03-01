@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 )
 
 func main() {
@@ -15,10 +16,10 @@ func main() {
 	flag.StringVar(&portList, "ports", "8000", "Comma-separated list of ports")
 	flag.Parse()
 
-	ports := strings.Split(",", portList)
+	ports := strings.Split(portList, ",")
 	hosts := make([]string, len(ports))
 	for i, port := range ports {
-		hosts[i] = fmt.Sprintf("%s:%d", host, port)
+		hosts[i] = fmt.Sprintf("%s:%s", host, port)
 	}
 
 	curr := 0

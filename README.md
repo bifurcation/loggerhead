@@ -10,7 +10,7 @@ data types):
 
 ```
 CREATE TABLE frontier (index BIGINT, subtree_size BIGINT, subhead BYTEA);
-CREATE TABLE certificates (timestamp INT64, tree_size INT64, tree_head BYTEA, cert BYTEA);
+CREATE TABLE certificates (timestamp BIGINT, tree_size BIGINT, tree_head BYTEA, cert BYTEA);
 ```
 
 Edit `db_config.go` to configure how the server should connect to the database.

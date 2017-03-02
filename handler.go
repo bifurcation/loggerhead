@@ -123,6 +123,7 @@ var (
 func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	outcome := outcomeSuccess
 	err := error(nil)
+	treeSize := int64(0)
 	enterHandler := float64(time.Now().UnixNano()) / 1000000000.0
 	defer func() {
 		exitHandler := float64(time.Now().UnixNano()) / 1000000000.0
@@ -136,7 +137,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 
 		response.WriteHeader(status)
 		response.Write([]byte(message + "\n"))
-		log.Printf("[%03d] [%8.6f] %s", status, elapsed, message)
+		log.Printf("[%03d] [%d] [%8.6f] %s", status, treeSize, elapsed, message)
 	}()
 
 	// Extract certificate from request
@@ -211,7 +212,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	// Update the frontier with this certificate
 	enterUpdate := float64(time.Now().UnixNano()) / 1000000000.0
 	f.Add(cert)
-	treeSize := f.Size()
+	treeSize = int64(f.Size())
 	exitUpdate := float64(time.Now().UnixNano()) / 1000000000.0
 	updateTime.Observe(exitUpdate - enterUpdate)
 

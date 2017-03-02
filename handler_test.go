@@ -29,7 +29,7 @@ func TestHandler(t *testing.T) {
 	db, err := getDB()
 	fatalIfNotNil(t, err, "getDB")
 
-	handler := LogHandler{db}
+	handler := LogHandler{DB: db}
 	d := [][]byte{}
 	for i, cert := range certs {
 		certDER, _ := base64.StdEncoding.DecodeString(cert)

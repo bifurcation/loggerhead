@@ -15,11 +15,8 @@ import (
 )
 
 const (
-	frontierSelectQ = "SELECT * FROM frontier ORDER BY index;"
-	frontierDeleteQ = "DELETE FROM frontier;"
-	frontierInsertQ = "INSERT INTO frontier VALUES ($1, $2, $3);"
-
-	certInsertQ = "INSERT INTO certificates VALUES ($1, $2, $3, $4);"
+	frontierSelectQ = "SELECT frontier FROM certificates ORDER BY tree_size DESC LIMIT 1;"
+	certInsertQ     = "INSERT INTO certificates VALUES ($1, $2, $3, $4);"
 )
 
 // Prometheus metrics
@@ -74,52 +71,22 @@ type addChainRequest struct {
 func readfrontier(tx *sql.Tx) (*frontier, error) {
 	f := frontier{}
 
-	rows, err := tx.Query(frontierSelectQ)
-	if err != nil {
+	var buf []byte
+	err := tx.QueryRow(frontierSelectQ).Scan(&buf)
+	switch err {
+	case sql.ErrNoRows:
+		return &f, nil
+	case nil:
+		err = f.Unmarshal(buf)
+		return &f, err
+	default:
 		return nil, err
 	}
-
-	next := uint64(0)
-	var index uint64
-	var subtreeSize uint64
-	var value []byte
-	for rows.Next() {
-		err = rows.Scan(&index, &subtreeSize, &value)
-		if err != nil {
-			return nil, err
-		}
-
-		if index != next {
-			return nil, fmt.Errorf("Row returned out of order [%d] != [%d]", index, next)
-		}
-
-		next += 1
-		f = append(f, frontierEntry{subtreeSize, value})
-	}
-	rows.Close()
-
-	return &f, nil
 }
 
-func logCertificate(tx *sql.Tx, timestamp, treeSize uint64, treeHead, cert []byte) error {
-	_, err := tx.Exec(certInsertQ, timestamp, treeSize, treeHead, cert)
+func logCertificate(tx *sql.Tx, timestamp, treeSize uint64, frontier, cert []byte) error {
+	_, err := tx.Exec(certInsertQ, timestamp, treeSize, frontier, cert)
 	return err
-}
-
-func writefrontier(tx *sql.Tx, f *frontier) error {
-	_, err := tx.Exec(frontierDeleteQ)
-	if err != nil {
-		return err
-	}
-
-	for i, entry := range *f {
-		_, err = tx.Exec(frontierInsertQ, i, entry.SubtreeSize, entry.Value)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 var (
@@ -245,24 +212,15 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	enterUpdate := float64(time.Now().UnixNano()) / 1000000000.0
 	f.Add(cert)
 	treeSize := f.Size()
-	treeHead := f.Head()
 	exitUpdate := float64(time.Now().UnixNano()) / 1000000000.0
 	updateTime.Observe(exitUpdate - enterUpdate)
 
 	// Log the certificate
 	timestamp := uint64(time.Now().Unix())
-	err = logCertificate(tx, timestamp, treeSize, treeHead, cert)
+	err = logCertificate(tx, timestamp, treeSize, f.Marshal(), cert)
 	if err != nil {
 		tx.Rollback()
 		outcome = outcomeLogCertErr
-		return
-	}
-
-	// Update the frontier
-	err = writefrontier(tx, f)
-	if err != nil {
-		tx.Rollback()
-		outcome = outcomeWriteFrontierErr
 		return
 	}
 

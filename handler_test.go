@@ -46,41 +46,29 @@ func TestHandler(t *testing.T) {
 			t.Fatalf("Request failed: [%d] [%d] [%s]", i, resp.Code, string(resp.Body.Bytes()))
 		}
 
-		// Check that the frontier looks correct
+		// Check that the certificates table looks correct
 		tx, err := db.Begin()
 		fatalIfNotNil(t, err, "db.Begin")
 
-		f, err := readfrontier(tx)
-		fatalIfNotNil(t, err, "Reading frontier")
-
-		treeSize := f.Size()
-		if treeSize != uint64(i+1) {
-			t.Fatalf("Incorrect size [%d] != [%d]", treeSize, i+1)
-		}
-
-		mh := merkleTreeHead(d)
-		fh := f.Head()
-		if !bytes.Equal(mh, fh) {
-			t.Fatalf("Incorrect frontier tree head [%x] != [%x]", mh, fh)
-		}
-
-		// Check that the certificates table looks correct
 		now := uint64(time.Now().Unix())
-		var timestamp, treeSize2 uint64
-		var treeHead, certData []byte
-		err = tx.QueryRow(certSelectQ, treeSize).Scan(&timestamp, &treeSize2, &treeHead, &certData)
+		var timestamp, treeSize uint64
+		var frontierBuf, certData []byte
+		err = tx.QueryRow(certSelectQ, i+1).Scan(&timestamp, &treeSize, &frontierBuf, &certData)
 		fatalIfNotNil(t, err, "Error finding certificate")
 
 		if now-timestamp > 1 /* seconds */ {
 			t.Fatalf("Incorrect timestamp [%d] != [%d]", timestamp, now)
 		}
 
-		if !bytes.Equal(treeHead, mh) {
-			t.Fatalf("Incorrect cert tree head [%x] != [%x]", mh, treeHead)
-		}
-
 		if !bytes.Equal(certDER, certData) {
 			t.Fatalf("Incorrect cert data [%x] != [%x]", certDER, certData)
+		}
+
+		f := frontier{}
+		err = f.Unmarshal(frontierBuf)
+		fatalIfNotNil(t, err, "Error unmarshaling frontier")
+		if f.Size() != treeSize {
+			t.Fatalf("Inconsistent tree size: [%d] != [%d]", f.Size(), treeSize)
 		}
 
 		tx.Rollback()

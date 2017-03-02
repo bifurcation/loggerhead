@@ -9,7 +9,7 @@ import (
 
 var (
 	hash      = crypto.SHA256
-	endian    = binary.LittleEndian
+	endian    = binary.BigEndian
 	entrySize = 8 + hash.Size()
 )
 

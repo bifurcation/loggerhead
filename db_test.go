@@ -13,6 +13,7 @@ const (
 	actuallyRun      = false
 	driver           = "postgres"
 	connectionString = "user=rbarnes dbname=rbarnes sslmode=disable"
+	frontierDeleteQ  = "DELETE FROM frontier;"
 	certDeleteQ      = "DELETE FROM certificates;"
 )
 

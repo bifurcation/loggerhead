@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	actuallyRun      = true
+	actuallyRun      = false
 	driver           = "postgres"
 	connectionString = "user=rbarnes dbname=rbarnes sslmode=disable"
 	certDeleteQ      = "DELETE FROM certificates;"

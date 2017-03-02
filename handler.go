@@ -84,7 +84,7 @@ func readfrontier(tx *sql.Tx) (*frontier, error) {
 	}
 }
 
-func logCertificate(tx *sql.Tx, timestamp, treeSize uint64, frontier, cert []byte) error {
+func logCertificate(tx *sql.Tx, timestamp, treeSize int64, frontier, cert []byte) error {
 	_, err := tx.Exec(certInsertQ, timestamp, treeSize, frontier, cert)
 	return err
 }
@@ -217,7 +217,7 @@ func (lh *LogHandler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	updateTime.Observe(exitUpdate - enterUpdate)
 
 	// Log the certificate
-	timestamp := uint64(time.Now().Unix())
+	timestamp := time.Now().Unix()
 	err = logCertificate(tx, timestamp, treeSize, f.Marshal(), cert)
 	if err != nil {
 		tx.Rollback()

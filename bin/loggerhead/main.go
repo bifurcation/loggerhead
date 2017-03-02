@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+
 
 	_ "github.com/lib/pq"
 
@@ -49,4 +52,20 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/ct/v1/add-chain", handler)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
+
+	shutdownC := make(chan struct{})
+	go func() {
+		sigs := make(chan os.Signal, 1)
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+		for s := range sigs {
+			switch s {
+			case syscall.SIGINT, syscall.SIGTERM:
+				log.Println("beginning shutdown")
+				shutdownC <- struct{}{}
+				return
+			}
+		}
+
+	}()
 }

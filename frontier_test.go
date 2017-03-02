@@ -28,11 +28,11 @@ func merkleTreeHead(d [][]byte) []byte {
 	return pairHash(l, r)
 }
 
-func Testfrontier(t *testing.T) {
+func TestFrontier(t *testing.T) {
 	f := frontier{}
 	d := [][]byte{}
 
-	for i := uint64(0); i < 10; i += 1 {
+	for i := uint64(0); i < testSamples; i += 1 {
 		v := []byte{byte(i)}
 		d = append(d, leafHash(v))
 		f.Add(v)
@@ -44,6 +44,36 @@ func Testfrontier(t *testing.T) {
 		h := merkleTreeHead(d)
 		if fh := f.Head(); !bytes.Equal(h, fh) {
 			t.Fatalf("Incorrect head [%d] [%x] != [%x]", i, fh, h)
+		}
+	}
+}
+
+func TestFrontierMarshalUnmarshal(t *testing.T) {
+	f := frontier{}
+	for i := uint64(0); i < testSamples; i += 1 {
+		v := []byte{byte(i)}
+		f.Add(v)
+	}
+
+	buf := f.Marshal()
+
+	f2 := frontier{}
+	err := f2.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("Failed marshal/unmarshal round trip: %v", err)
+	}
+
+	if len(f) != len(f2) {
+		t.Fatalf("Unmarshaled frontier has different size [%d] [%d]", len(f), len(f2))
+	}
+
+	for i := range f2 {
+		if f[i].SubtreeSize != f2[i].SubtreeSize {
+			t.Fatalf("Unmarshaled frontier has different subtree size [%d] [%d]", f[i].SubtreeSize, f2[i].SubtreeSize)
+		}
+
+		if !bytes.Equal(f[i].Value, f2[i].Value) {
+			t.Fatalf("Unmarshaled frontier has different value [%x] [%x]", f[i].Value, f2[i].Value)
 		}
 	}
 }

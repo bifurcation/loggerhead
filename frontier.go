@@ -3,12 +3,15 @@ package loggerhead
 import (
 	"crypto"
 	_ "crypto/sha256"
+	"encoding/binary"
+	"fmt"
 )
 
-// Merkle tree primitives
-const hash = crypto.SHA256
-
-var hashCounter = 0
+var (
+	hash      = crypto.SHA256
+	endian    = binary.LittleEndian
+	entrySize = 8 + hash.Size()
+)
 
 func leafHash(d []byte) []byte {
 	h := hash.New()
@@ -22,8 +25,6 @@ func pairHash(d1, d2 []byte) []byte {
 	h.Write([]byte{0x01})
 	h.Write(d1)
 	h.Write(d2)
-
-	hashCounter += 1
 	return h.Sum(nil)
 }
 
@@ -85,4 +86,34 @@ func (f frontier) Head() []byte {
 	}
 
 	return curr
+}
+
+func (f frontier) Marshal() []byte {
+	buf := make([]byte, len(f)*entrySize)
+
+	for i, entry := range f {
+		start := entrySize * i
+		end := start + entrySize
+		endian.PutUint64(buf[start:], entry.SubtreeSize)
+		copy(buf[start+8:end], entry.Value)
+	}
+
+	return buf
+}
+
+func (f *frontier) Unmarshal(buf []byte) error {
+	if len(buf)%entrySize != 0 {
+		return fmt.Errorf("Malformed frontier: Incorrect size")
+	}
+
+	*f = make([]frontierEntry, len(buf)/entrySize)
+	for i := range *f {
+		start := entrySize * i
+		end := start + entrySize
+		(*f)[i].SubtreeSize = endian.Uint64(buf[start:])
+		(*f)[i].Value = make([]byte, hash.Size())
+		copy((*f)[i].Value, buf[start+8:end])
+	}
+
+	return nil
 }
